@@ -1,5 +1,5 @@
 #![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
+#![allow(unused_imports)]
 use std::f32::consts::E;
 use std::ops::Bound;
 use std::path::Path;
@@ -38,8 +38,13 @@ pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
 
 impl MemTable {
     /// Create a new mem-table.
-    pub fn create(_id: usize) -> Self {
-        unimplemented!()
+    pub fn create(id: usize) -> Self {
+        MemTable {
+            map: Arc::new(SkipMap::new()),
+            wal: None,
+            id: id,
+            approximate_size: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     /// Create a new mem-table with WAL
@@ -79,10 +84,14 @@ impl MemTable {
     /// In week 1, day 1, simply put the key-value pair into the skipmap.
     /// In week 2, day 6, also flush the data to WAL.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.map.insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
-
+        let estimated_size = key.len() + value.len();
+        self.map
+            .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
+        self.approximate_size
+            .fetch_add(estimated_size, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
+
 
     pub fn sync_wal(&self) -> Result<()> {
         if let Some(ref wal) = self.wal {
