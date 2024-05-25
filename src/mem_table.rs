@@ -12,7 +12,7 @@ use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{KeySlice, KeyBytes};
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
 
@@ -148,15 +148,16 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        &self.borrow_item().1[..]
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        &self.borrow_item().0.as_key_slice()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        // return false if we have reached the end of the iterator or errored
+        !self.borrow_item().0.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
