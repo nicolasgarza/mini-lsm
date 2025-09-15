@@ -18,12 +18,12 @@
 use std::collections::HashMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
 use crate::block::Block;
 use crate::compact::{
@@ -297,8 +297,30 @@ impl LsmStorageInner {
     }
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
-    pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+    pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        let state = self.state.read();
+
+        let curr_memtable_res = state.memtable.get(key);
+        if curr_memtable_res.is_some() {
+            if curr_memtable_res.clone().unwrap().len() == 0 {
+                return Ok(None);
+            } else {
+                return Ok(curr_memtable_res);
+            }
+        }
+
+        for frozen_memtable in state.imm_memtables.iter() {
+            let frozen_memtable_res = frozen_memtable.get(key);
+            if frozen_memtable_res.is_some() {
+                if frozen_memtable_res.clone().unwrap().len() == 0 {
+                    return Ok(None);
+                } else {
+                    return Ok(frozen_memtable_res);
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
@@ -307,13 +329,31 @@ impl LsmStorageInner {
     }
 
     /// Put a key-value pair into the storage by writing into the current memtable.
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        let state = self.state.read();
+        let _ = state.memtable.put(key, value);
+        if state.memtable.approximate_size() > self.options.target_sst_size {
+            let state_lock = self.state_lock.lock();
+            if state.memtable.approximate_size() > self.options.target_sst_size {
+                RwLockReadGuard::unlock_fair(state);
+                self.force_freeze_memtable(&state_lock)?;
+            }
+        }
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
-    pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+    pub fn delete(&self, key: &[u8]) -> Result<()> {
+        let state = self.state.read();
+        let _ = state.memtable.put(key, &[]);
+        if state.memtable.approximate_size() > self.options.target_sst_size {
+            let state_lock = self.state_lock.lock();
+            if state.memtable.approximate_size() > self.options.target_sst_size {
+                RwLockReadGuard::unlock_fair(state);
+                self.force_freeze_memtable(&state_lock)?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -337,8 +377,22 @@ impl LsmStorageInner {
     }
 
     /// Force freeze the current memtable to an immutable memtable
-    pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+    pub fn force_freeze_memtable(&self, state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
+        let memtable = MemTable::create(LsmStorageInner::next_sst_id(self));
+        let mut new_state = LsmStorageState::create(&self.options);
+        {
+            let state = self.state.read();
+            new_state.memtable = memtable.into();
+            new_state.imm_memtables = state.imm_memtables.clone();
+            new_state.imm_memtables.insert(0, state.memtable.clone());
+            new_state.l0_sstables = state.l0_sstables.clone();
+            new_state.levels = state.levels.clone();
+            new_state.sstables = state.sstables.clone();
+        }
+
+        let mut state = self.state.write();
+        *state = Arc::new(new_state);
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk
