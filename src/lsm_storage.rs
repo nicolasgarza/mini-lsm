@@ -300,23 +300,13 @@ impl LsmStorageInner {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         let state = self.state.read();
 
-        let curr_memtable_res = state.memtable.get(key);
-        if curr_memtable_res.is_some() {
-            if curr_memtable_res.clone().unwrap().len() == 0 {
-                return Ok(None);
-            } else {
-                return Ok(curr_memtable_res);
-            }
+        if let Some(value) = state.memtable.get(key) {
+            return Ok(if value.is_empty() { None } else { Some(value) });
         }
 
-        for frozen_memtable in state.imm_memtables.iter() {
-            let frozen_memtable_res = frozen_memtable.get(key);
-            if frozen_memtable_res.is_some() {
-                if frozen_memtable_res.clone().unwrap().len() == 0 {
-                    return Ok(None);
-                } else {
-                    return Ok(frozen_memtable_res);
-                }
+        for imm in state.imm_memtables.iter() {
+            if let Some(value) = imm.get(key) {
+                return Ok(if value.is_empty() { None } else { Some(value) });
             }
         }
 
