@@ -15,13 +15,15 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use std::default;
 use std::ops::Bound;
 use std::path::Path;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use anyhow::Result;
 use bytes::Bytes;
+use crossbeam_epoch::Pointable;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 
@@ -126,8 +128,20 @@ impl MemTable {
     }
 
     /// Get an iterator over a range of keys.
-    pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+    pub fn scan(&self, _lower: Bound<&'static [u8]>, _upper: Bound<&'static [u8]>) -> MemTableIterator {
+        let (mut key, mut value) = (Bytes::new(), Bytes::new());
+        if let Some(entry) = self.map.lower_bound(_lower) {
+            key = entry.key().clone();
+            value = entry.value().clone();
+        }
+
+        MemTableIteratorBuilder {
+            map: self.map.clone(),
+            iter_builder: |map| {
+                map.range((_lower.map(|bytes| Bytes::from_static(bytes)), _upper.map(|bytes| Bytes::from_static(bytes))))
+            },
+            item: (key, value)
+        }.build()
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -177,18 +191,27 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        &self.borrow_item().1
     }
 
-    fn key(&self) -> KeySlice {
-        unimplemented!()
+    fn key(&self) -> KeySlice<'_> {
+        KeySlice::from_slice(&self.borrow_item().0)
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.borrow_item().0.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let next_item = self
+            .with_iter_mut(|iter| iter.next())
+            .map(|e| (e.key().clone(), e.value().clone()))
+            .expect("Error in next() for MemTableIterator");
+
+        self.with_mut(|entry| {
+            entry.item.0 = next_item.0;
+            entry.item.1 = next_item.1;
+        });
+        Ok(())
     }
 }
