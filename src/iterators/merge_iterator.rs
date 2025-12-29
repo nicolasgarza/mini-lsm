@@ -20,7 +20,7 @@ use std::collections::BinaryHeap;
 
 use anyhow::Result;
 
-use crate::key::KeySlice;
+use crate::key::{Key, KeySlice};
 
 use super::StorageIterator;
 
@@ -59,7 +59,13 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut heap: BinaryHeap<HeapWrapper<I>> = BinaryHeap::new();
+        for (i, item) in iters.into_iter().enumerate() {
+            heap.push(HeapWrapper(i, item));
+        }
+
+        let current = heap.pop();
+        MergeIterator { iters: heap, current: current }
     }
 }
 
@@ -69,18 +75,39 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        if let Some(current) = &self.current {
+            return current.1.key();
+        }
+        Key::from_slice(&[])
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if let Some(current) = &self.current {
+            return current.1.value();
+        }
+        &[]
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.is_some()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        // call next on current iterator
+        // push it back to the heap
+        // pop from heap again, set as current
+        self.current.iter().next();
+        if let Some(current) = self.current.take() {
+            self.iters.push(current);
+        }
+
+        match self.iters.pop() {
+            Some(iter) => {
+                self.current = Some(iter);
+                return Ok(());
+             },
+            None => { return Err(anyhow::anyhow!("empty")); },
+        };
+
     }
 }
