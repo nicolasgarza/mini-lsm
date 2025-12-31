@@ -128,7 +128,7 @@ impl MemTable {
     }
 
     /// Get an iterator over a range of keys.
-    pub fn scan(&self, _lower: Bound<&'static [u8]>, _upper: Bound<&'static [u8]>) -> MemTableIterator {
+    pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
         let (mut key, mut value) = (Bytes::new(), Bytes::new());
         if let Some(entry) = self.map.lower_bound(_lower) {
             key = entry.key().clone();
@@ -138,7 +138,7 @@ impl MemTable {
         MemTableIteratorBuilder {
             map: self.map.clone(),
             iter_builder: |map| {
-                map.range((_lower.map(|bytes| Bytes::from_static(bytes)), _upper.map(|bytes| Bytes::from_static(bytes))))
+                map.range((map_bound(_lower), map_bound(_upper)))
             },
             item: (key, value)
         }.build()
